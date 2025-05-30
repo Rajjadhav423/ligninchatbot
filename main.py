@@ -55,14 +55,23 @@
 # # Predict
 # output = model.predict(X_test)``
 
+
 # print("Prediction output:ice melting point", output)
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
 import pickle
 
 app = FastAPI()
-
+# Add CORS middleware — allow everything (for development only)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
 # Load models once at startup
 with open("all (1).pkl", "rb") as f:
     seawater_model = pickle.load(f)
