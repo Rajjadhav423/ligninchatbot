@@ -53,7 +53,7 @@
 # X_test = pd.DataFrame([[25, 35, 10]], columns=model.feature_names_in_)
 
 # # Predict
-# output = model.predict(X_test)
+# output = model.predict(X_test)``
 
 # print("Prediction output:ice melting point", output)
 from fastapi import FastAPI
