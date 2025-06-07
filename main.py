@@ -1,148 +1,23 @@
-
-# # import numpy as np
-# # import pandas as pd
-# # import pickle
-# # # import pickle
-# # # import numpy as np
-
-# # # Step 1: Load the model from file
-# # with open("all (1).pkl", "rb") as f:
-# #     model = pickle.load(f)
-
-# # # Step 2: Prepare test input
-# # # Suppose temperature = 25°C, salinity = 35 PSU
-# # X_test = np.array([[25, 35]])
-
-# # # Step 3: Predict using the model
-# # output = model.predict(X_test)[0]  # Get the first prediction row
-
-# # labels = [
-# #     ("Seawater Density (kg/m³)", "kg/m³"),
-# #     ("Ultrasonic Velocity (m/s)", "m/s"),
-# #     ("Thermal Expansion Coefficient (K⁻¹)", "K⁻¹"),
-# #     ("Adiabatic Compressibility (TPa⁻¹)", "TPa⁻¹"),
-# #     ("Isothermal Compressibility (TPa⁻¹)", "TPa⁻¹"),
-# #     ("Heat Capacity (kJ/kg·K)", "kJ/kg·K"),
-# #     ("Intermolecular Free Length (×10⁻¹¹ m)", "×10⁻¹¹ m"),
-# #     ("Internal Pressure (MPa)", "MPa"),
-# #     ("Cohesion Energy Density (Pa·m)", "Pa·m"),
-# #     ("Grüneisen Parameter", ""),
-# #     ("Acoustic Impedance (×10⁴ kg/m²·s)", "×10⁴ kg/m²·s"),
-# #     ("Non-Linearity Parameter", "")
-# # ]
-
-
-# # # Step 5: Print all outputs with labels
-# # print("🔍 Predicted Seawater Properties:\n")
-# # for i, (label, unit) in enumerate(labels):
-# #     print(f"{label}: {output[i]:.6f} {unit}")
-
-
-
-
-
-# # # Load the model
-# # with open("ice_rf_model.pkl", "rb") as f:
-# #     model = pickle.load(f)
-
-# # # Print expected feature names (optional, for debug)
-# # #input are temperature , year , months
-# # print("Model expects features:", model.feature_names_in_)
-
-# # # Prepare test input as DataFrame with correct feature names
-# # X_test = pd.DataFrame([[25, 35, 10]], columns=model.feature_names_in_)
-
-# # # Predict
-# # output = model.predict(X_test)``
-
-
-# # print("Prediction output:ice melting point", output)
-# from fastapi import FastAPI
-# from fastapi.middleware.cors import CORSMiddleware
-# from pydantic import BaseModel
-# import numpy as np
-# import pickle
-
-# app = FastAPI()
-# # Add CORS middleware — allow everything (for development only)
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],  # Allow all origins
-#     allow_credentials=True,
-#     allow_methods=["*"],  # Allow all HTTP methods
-#     allow_headers=["*"],  # Allow all headers
-# )
-# # Load models once at startup
-# with open("all (1).pkl", "rb") as f:
-#     seawater_model = pickle.load(f)
-
-# with open("ice_rf_model.pkl", "rb") as f:
-#     ice_model = pickle.load(f)
-
-
-# # Input schema for seawater model
-# class SeawaterInput(BaseModel):
-#     temperature: float
-#     salinity: float
-
-# # Input schema for ice melting point model
-# class IceInput(BaseModel):
-#     temperature: float
-#     year: int
-#     month: int
-
-
-# @app.post("/predict_seawater")
-# def predict_seawater(data: SeawaterInput):
-#     # Prepare input as numpy array
-#     X_test = np.array([[data.temperature, data.salinity]])
-#     output = seawater_model.predict(X_test)[0]
-    
-#     # Labels as per your original code
-#     labels = [
-#         "Seawater Density (kg/m³)",
-#         "Ultrasonic Velocity (m/s)",
-#         "Thermal Expansion Coefficient (K⁻¹)",
-#         "Adiabatic Compressibility (TPa⁻¹)",
-#         "Isothermal Compressibility (TPa⁻¹)",
-#         "Heat Capacity (kJ/kg·K)",
-#         "Intermolecular Free Length (×10⁻¹¹ m)",
-#         "Internal Pressure (MPa)",
-#         "Cohesion Energy Density (Pa·m)",
-#         "Grüneisen Parameter",
-#         "Acoustic Impedance (×10⁴ kg/m²·s)",
-#         "Non-Linearity Parameter"
-#     ]
-
-#     # Return dict with labels and predictions
-#     result = {label: float(value) for label, value in zip(labels, output)}
-#     return {"prediction": result}
-
-
-# @app.post("/predict_ice")
-# def predict_ice(data: IceInput):
-#     # Prepare input as numpy array with correct shape
-#     # Assuming ice_model expects features in order: temperature, year, month
-#     X_test = np.array([[data.temperature, data.year, data.month]])
-#     output = ice_model.predict(X_test)[0]
-#     return {"ice_melting_point": float(output)}
-
-
-from fastapi import FastAPI, HTTPException
+# main.py - Combined Seawater Properties and Ice Melting Rate Prediction API
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import pickle
+import joblib
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import uvicorn
+import os
+from datetime import datetime
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Seawater Properties Prediction API",
-    description="API for predicting seawater properties based on temperature and salinity",
+    title="Combined Environmental Prediction API",
+    description="API for predicting seawater properties and ice melting rates",
     version="1.0.0"
 )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allow all origins
@@ -151,17 +26,11 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
-# Load the trained model
-try:
-    with open('seawater_model.pkl', 'rb') as f:
-        model_data = pickle.load(f)
-    print("Model loaded successfully!")
-    print(f"Model R² Score: {model_data['test_r2_score']:.4f}")
-except FileNotFoundError:
-    print("Error: seawater_model.pkl not found. Please run the model training script first.")
-    model_data = None
+# Global variables for models
+seawater_model_data = None
+ice_model_data = None
 
-# Request model for input validation
+# ============= SEAWATER MODELS =============
 class SeawaterInput(BaseModel):
     temperature_k: float = Field(
         ..., 
@@ -184,18 +53,87 @@ class SeawaterInput(BaseModel):
             }
         }
 
-# Response model
 class SeawaterOutput(BaseModel):
     input_parameters: Dict[str, float]
     predictions: Dict[str, float]
     model_info: Dict[str, Any]
 
+# ============= ICE MELTING MODELS =============
+class IcePredictionRequest(BaseModel):
+    temperature_k: float = Field(..., description="Temperature in Kelvin", ge=200.0, le=300.0)
+    year: int = Field(..., description="Year", ge=1990, le=2030)
+    month: int = Field(..., description="Month (1-12)", ge=1, le=12)
+
+class IcePredictionResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    
+    predicted_ice_melting_rate: float
+    temperature_k: float
+    year: int
+    month: int
+    model_used: str
+    prediction_timestamp: str
+
+class ModelInfo(BaseModel):
+    seawater_model: Optional[Dict[str, Any]] = None
+    ice_model: Optional[Dict[str, Any]] = None
+
+class HealthResponse(BaseModel):
+    status: str
+    message: str
+    seawater_model_loaded: bool
+    ice_model_loaded: bool
+
+# ============= MODEL LOADING FUNCTIONS =============
+def load_seawater_model():
+    """Load the seawater properties model"""
+    global seawater_model_data
+    
+    try:
+        with open('seawater_model.pkl', 'rb') as f:
+            seawater_model_data = pickle.load(f)
+        print("✅ Seawater model loaded successfully!")
+        print(f"Seawater Model R² Score: {seawater_model_data['test_r2_score']:.4f}")
+        return True
+    except FileNotFoundError:
+        print("❌ Error: seawater_model.pkl not found.")
+        return False
+    except Exception as e:
+        print(f"❌ Error loading seawater model: {str(e)}")
+        return False
+
+def load_ice_model():
+    """Load the ice melting rate model"""
+    global ice_model_data
+    
+    # Try to load from different possible locations
+    model_paths = [
+        "ice_melting_api_model.pkl",
+        "ice_melting_api_model.joblib"
+    ]
+    
+    for model_path in model_paths:
+        if os.path.exists(model_path):
+            try:
+                if model_path.endswith('.pkl'):
+                    with open(model_path, 'rb') as f:
+                        ice_model_data = pickle.load(f)
+                else:
+                    ice_model_data = joblib.load(model_path)
+                print(f"✅ Ice model loaded successfully from: {model_path}")
+                return True
+            except Exception as e:
+                print(f"❌ Error loading ice model from {model_path}: {str(e)}")
+                continue
+    
+    print("❌ No ice model file found in any of the expected locations")
+    return False
+
+# ============= SEAWATER PREDICTION FUNCTIONS =============
 def predict_seawater_properties(temperature_k: float, salinity_g_kg: float) -> Dict[str, float]:
-    """
-    Predict seawater properties given temperature and salinity
-    """
-    if model_data is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    """Predict seawater properties given temperature and salinity"""
+    if seawater_model_data is None:
+        raise HTTPException(status_code=500, detail="Seawater model not loaded")
     
     # Create input with enhanced features
     input_data = pd.DataFrame({
@@ -214,62 +152,144 @@ def predict_seawater_properties(temperature_k: float, salinity_g_kg: float) -> D
     input_enhanced['Temp_Squared_Sal'] = (input_data['Temperature (K)'] ** 2) * input_data['Salinity (g/kg)']
     
     # Scale features
-    input_scaled = model_data['scaler'].transform(input_enhanced)
+    input_scaled = seawater_model_data['scaler'].transform(input_enhanced)
     
     # Predict
-    prediction = model_data['model'].predict(input_scaled)
+    prediction = seawater_model_data['model'].predict(input_scaled)
     
     # Create result dictionary
     result = {}
-    for i, target_name in enumerate(model_data['target_names']):
+    for i, target_name in enumerate(seawater_model_data['target_names']):
         result[target_name] = float(prediction[0][i])
     
     return result
 
-@app.get("/")
+# ============= ICE PREDICTION FUNCTIONS =============
+def create_ice_features(temperature_k: float, year: int, month: int) -> np.ndarray:
+    """Create feature array with the same engineering as training"""
+    if ice_model_data is None:
+        raise HTTPException(status_code=500, detail="Ice model not loaded")
+    
+    # Get normalization factors from model data
+    year_min = ice_model_data['feature_engineering_info']['normalization_factors']['year_min']
+    year_max = ice_model_data['feature_engineering_info']['normalization_factors']['year_max']
+    
+    # Feature engineering (same as training)
+    year_norm = (year - year_min) / (year_max - year_min)
+    month_sin = np.sin(2 * np.pi * month / 12)
+    month_cos = np.cos(2 * np.pi * month / 12)
+    temp_squared = temperature_k ** 2
+    temp_year_interaction = temperature_k * year_norm
+    temp_month_sin = temperature_k * month_sin
+    temp_month_cos = temperature_k * month_cos
+    
+    # Create feature array in the same order as training
+    features = np.array([[
+        temperature_k, year, month, year_norm, month_sin, month_cos,
+        temp_squared, temp_year_interaction, temp_month_sin, temp_month_cos
+    ]])
+    
+    return features
+
+def predict_ice_melting_rate(temperature_k: float, year: int, month: int) -> float:
+    """Predict ice melting rate using the loaded model"""
+    if ice_model_data is None:
+        raise HTTPException(status_code=500, detail="Ice model not loaded")
+    
+    try:
+        # Create features
+        features = create_ice_features(temperature_k, year, month)
+        
+        # Apply scaling if the model requires it
+        if ice_model_data['uses_scaling'] and ice_model_data['scaler'] is not None:
+            features = ice_model_data['scaler'].transform(features)
+        
+        # Make prediction
+        prediction = ice_model_data['model'].predict(features)[0]
+        return float(prediction)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ice prediction error: {str(e)}")
+
+# ============= API ENDPOINTS =============
+
+@app.on_event("startup")
+async def startup_event():
+    """Load models on startup"""
+    print("🚀 Loading models...")
+    seawater_success = load_seawater_model()
+    ice_success = load_ice_model()
+    
+    if not seawater_success:
+        print("⚠️  Warning: Seawater model not loaded.")
+    if not ice_success:
+        print("⚠️  Warning: Ice model not loaded.")
+
+@app.get("/", response_model=HealthResponse)
 async def root():
     """Root endpoint with API information"""
-    return {
-        "message": "Seawater Properties Prediction API",
-        "status": "active",
-        "model_loaded": model_data is not None,
-        "endpoints": {
-            "predict": "/predict",
-            "health": "/health",
-            "model-info": "/model-info"
-        }
-    }
+    return HealthResponse(
+        status="healthy",
+        message="Combined Environmental Prediction API is running",
+        seawater_model_loaded=seawater_model_data is not None,
+        ice_model_loaded=ice_model_data is not None
+    )
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "model_loaded": model_data is not None,
-        "model_r2_score": model_data['test_r2_score'] if model_data else None
-    }
-
-@app.get("/model-info")
-async def model_info():
-    """Get model information"""
-    if model_data is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    seawater_loaded = seawater_model_data is not None
+    ice_loaded = ice_model_data is not None
     
-    return {
-        "model_type": "Multi-Output Gradient Boosting Regressor",
-        "feature_count": len(model_data['feature_names']),
-        "target_count": len(model_data['target_names']),
-        "feature_names": model_data['feature_names'],
-        "target_names": model_data['target_names'],
-        "test_r2_score": model_data['test_r2_score'],
-        "input_requirements": {
-            "temperature_k": "Temperature in Kelvin (273.15 - 373.15)",
-            "salinity_g_kg": "Salinity in g/kg (0 - 50)"
-        }
-    }
+    if seawater_loaded and ice_loaded:
+        status = "healthy"
+        message = "Both models loaded successfully"
+    elif seawater_loaded or ice_loaded:
+        status = "degraded"
+        message = "Only one model loaded"
+    else:
+        status = "unhealthy"
+        message = "No models loaded"
+    
+    return HealthResponse(
+        status=status,
+        message=message,
+        seawater_model_loaded=seawater_loaded,
+        ice_model_loaded=ice_loaded
+    )
 
-@app.post("/predict", response_model=SeawaterOutput)
-async def predict_properties(input_data: SeawaterInput):
+@app.get("/model-info", response_model=ModelInfo)
+async def get_model_info():
+    """Get information about loaded models"""
+    seawater_info = None
+    ice_info = None
+    
+    if seawater_model_data is not None:
+        seawater_info = {
+            "model_type": "Multi-Output Gradient Boosting Regressor",
+            "feature_count": len(seawater_model_data['feature_names']),
+            "target_count": len(seawater_model_data['target_names']),
+            "feature_names": seawater_model_data['feature_names'],
+            "target_names": seawater_model_data['target_names'],
+            "test_r2_score": seawater_model_data['test_r2_score']
+        }
+    
+    if ice_model_data is not None:
+        ice_info = {
+            "model_name": ice_model_data['model_name'],
+            "test_r2_score": ice_model_data['performance']['test_r2_score'],
+            "cv_score": ice_model_data['performance']['cv_score'],
+            "rmse": ice_model_data['performance']['rmse'],
+            "mae": ice_model_data['performance']['mae'],
+            "features_used": ice_model_data['feature_columns'],
+            "data_range": ice_model_data['data_stats']
+        }
+    
+    return ModelInfo(seawater_model=seawater_info, ice_model=ice_info)
+
+# ============= SEAWATER ENDPOINTS =============
+@app.post("/predict/seawater", response_model=SeawaterOutput)
+async def predict_seawater(input_data: SeawaterInput):
     """
     Predict seawater properties based on temperature and salinity
     
@@ -280,7 +300,6 @@ async def predict_properties(input_data: SeawaterInput):
     - Internal Pressure (πi) (MPa)
     - Heat Capacity (Cp)(kj/kgK)
     - Cohesion Energy Density (CED) (MPa)
-    - And other properties...
     """
     try:
         # Make prediction
@@ -299,7 +318,7 @@ async def predict_properties(input_data: SeawaterInput):
             predictions=predictions,
             model_info={
                 "model_type": "Multi-Output Gradient Boosting Regressor",
-                "r2_score": model_data['test_r2_score'],
+                "r2_score": seawater_model_data['test_r2_score'],
                 "prediction_count": len(predictions)
             }
         )
@@ -307,13 +326,11 @@ async def predict_properties(input_data: SeawaterInput):
         return response
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Seawater prediction error: {str(e)}")
 
-@app.post("/predict-batch")
-async def predict_batch(input_list: list[SeawaterInput]):
-    """
-    Predict seawater properties for multiple input combinations
-    """
+@app.post("/predict/seawater-batch")
+async def predict_seawater_batch(input_list: list[SeawaterInput]):
+    """Predict seawater properties for multiple input combinations"""
     if len(input_list) > 100:
         raise HTTPException(status_code=400, detail="Maximum 100 predictions per batch")
     
@@ -345,8 +362,92 @@ async def predict_batch(input_list: list[SeawaterInput]):
         "batch_size": len(input_list),
         "results": results,
         "model_info": {
-            "r2_score": model_data['test_r2_score'] if model_data else None
+            "r2_score": seawater_model_data['test_r2_score'] if seawater_model_data else None
         }
+    }
+
+# ============= ICE MELTING ENDPOINTS =============
+@app.post("/predict/ice", response_model=IcePredictionResponse)
+async def predict_ice(request: IcePredictionRequest):
+    """Predict ice melting rate based on temperature, year, and month"""
+    if ice_model_data is None:
+        raise HTTPException(status_code=503, detail="Ice model not loaded")
+    
+    try:
+        # Make prediction
+        predicted_rate = predict_ice_melting_rate(
+            request.temperature_k, 
+            request.year, 
+            request.month
+        )
+        
+        return IcePredictionResponse(
+            predicted_ice_melting_rate=round(predicted_rate, 2),
+            temperature_k=request.temperature_k,
+            year=request.year,
+            month=request.month,
+            model_used=ice_model_data['model_name'],
+            prediction_timestamp=datetime.now().isoformat()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@app.get("/predict/ice")
+async def predict_ice_get(
+    temperature_k: float = Query(..., description="Temperature in Kelvin", ge=200.0, le=300.0),
+    year: int = Query(..., description="Year", ge=1990, le=2030),
+    month: int = Query(..., description="Month (1-12)", ge=1, le=12)
+):
+    """GET endpoint for ice prediction (alternative to POST)"""
+    request = IcePredictionRequest(
+        temperature_k=temperature_k,
+        year=year,
+        month=month
+    )
+    return await predict_ice(request)
+
+@app.post("/predict/ice-batch")
+async def predict_ice_batch(requests: list[IcePredictionRequest]):
+    """Batch prediction for multiple ice melting inputs"""
+    if ice_model_data is None:
+        raise HTTPException(status_code=503, detail="Ice model not loaded")
+    
+    if len(requests) > 100:
+        raise HTTPException(status_code=400, detail="Maximum 100 predictions per batch")
+    
+    results = []
+    for req in requests:
+        try:
+            predicted_rate = predict_ice_melting_rate(req.temperature_k, req.year, req.month)
+            results.append(IcePredictionResponse(
+                predicted_ice_melting_rate=round(predicted_rate, 2),
+                temperature_k=req.temperature_k,
+                year=req.year,
+                month=req.month,
+                model_used=ice_model_data['model_name'],
+                prediction_timestamp=datetime.now().isoformat()
+            ))
+        except Exception as e:
+            results.append({
+                "error": f"Failed to predict for temp={req.temperature_k}, year={req.year}, month={req.month}: {str(e)}"
+            })
+    
+    return {"predictions": results}
+
+# ============= UTILITY ENDPOINTS =============
+@app.post("/load-models")
+async def load_models_endpoint():
+    """Manually trigger model loading"""
+    seawater_success = load_seawater_model()
+    ice_success = load_ice_model()
+    
+    return {
+        "seawater_model_loaded": seawater_success,
+        "ice_model_loaded": ice_success,
+        "message": f"Seawater: {'✅' if seawater_success else '❌'}, Ice: {'✅' if ice_success else '❌'}"
     }
 
 # Custom exception handler
@@ -358,10 +459,25 @@ async def http_exception_handler(request, exc):
     }
 
 if __name__ == "__main__":
+    print("🚀 Starting Combined Environmental Prediction API...")
+    print("📚 API Documentation will be available at: http://localhost:8000/docs")
+    print("🔍 Alternative docs at: http://localhost:8000/redoc")
+    print("\n🌊 Seawater endpoints:")
+    print("  - POST /predict/seawater")
+    print("  - POST /predict/seawater-batch")
+    print("\n🧊 Ice melting endpoints:")
+    print("  - POST /predict/ice")
+    print("  - GET /predict/ice")
+    print("  - POST /predict/ice-batch")
+    print("\n📊 General endpoints:")
+    print("  - GET /health")
+    print("  - GET /model-info")
+    
     # Run the FastAPI server
     uvicorn.run(
-        "main:app",  # Change this to your filename if different
+        "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=True,
+        log_level="info"
     )
