@@ -29,6 +29,79 @@ app.add_middleware(
 # Global variables for models
 seawater_model_data = None
 ice_model_data = None
+multi_output_model_data = None
+
+# ============= ADD NEW INPUT/OUTPUT MODELS =============
+class MultiOutputInput(BaseModel):
+    year: int = Field(..., description="Year", ge=1990, le=2030)
+    month: int = Field(..., description="Month (1-12)", ge=1, le=12)
+    temperature_k: float = Field(..., description="Temperature in Kelvin", ge=200.0, le=350.0)
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "year": 2024,
+                "month": 6,
+                "temperature_k": 275.5
+            }
+        }
+
+class MultiOutputResponse(BaseModel):
+    input_parameters: Dict[str, Any]
+    predictions: Dict[str, float]
+    model_info: Dict[str, Any]
+    prediction_timestamp: str
+
+# ============= ADD NEW MODEL LOADING FUNCTION =============
+def load_multi_output_model():
+    """Load the multi-output model"""
+    global multi_output_model_data
+    
+    try:
+        with open('multi_output_model.pkl', 'rb') as f:
+            multi_output_model_data = pickle.load(f)
+        print("✅ Multi-output model loaded successfully!")
+        print(f"Model: {multi_output_model_data['model_name']}")
+        print(f"Overall R² Score: {multi_output_model_data['performance']['overall_r2']:.4f}")
+        return True
+    except FileNotFoundError:
+        print("❌ Error: multi_output_model.pkl not found.")
+        return False
+    except Exception as e:
+        print(f"❌ Error loading multi-output model: {str(e)}")
+        return False
+
+# ============= ADD NEW PREDICTION FUNCTION =============
+def predict_multi_output_properties(year: int, month: int, temperature_k: float) -> Dict[str, float]:
+    """Predict all output properties using multi-output model"""
+    if multi_output_model_data is None:
+        raise HTTPException(status_code=500, detail="Multi-output model not loaded")
+    
+    try:
+        # Create input dataframe
+        input_data = pd.DataFrame({
+            'year': [year],
+            'Month': [month],
+            'Temperature (K)': [temperature_k]
+        })
+        
+        # Fill any missing values with mean (same as training)
+        input_data = input_data.fillna(input_data.mean())
+        
+        # Make prediction
+        predictions = multi_output_model_data['model'].predict(input_data)
+        
+        # Create result dictionary
+        result = {}
+        for i, output_name in enumerate(multi_output_model_data['output_features']):
+            result[output_name] = float(predictions[0][i])
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Multi-output prediction error: {str(e)}")
+
+
 
 # ============= SEAWATER MODELS =============
 class SeawaterInput(BaseModel):
@@ -213,18 +286,33 @@ def predict_ice_melting_rate(temperature_k: float, year: int, month: int) -> flo
 
 # ============= API ENDPOINTS =============
 
+# @app.on_event("startup")
+# async def startup_event():
+#     """Load models on startup"""
+#     print("🚀 Loading models...")
+#     seawater_success = load_seawater_model()
+#     ice_success = load_ice_model()
+    
+#     if not seawater_success:
+#         print("⚠️  Warning: Seawater model not loaded.")
+#     if not ice_success:
+#         print("⚠️  Warning: Ice model not loaded.")
+
+# ============= UPDATE STARTUP EVENT =============
 @app.on_event("startup")
 async def startup_event():
     """Load models on startup"""
     print("🚀 Loading models...")
     seawater_success = load_seawater_model()
     ice_success = load_ice_model()
+    multi_output_success = load_multi_output_model()  # ADD THIS LINE
     
     if not seawater_success:
         print("⚠️  Warning: Seawater model not loaded.")
     if not ice_success:
         print("⚠️  Warning: Ice model not loaded.")
-
+    if not multi_output_success:  # ADD THIS BLOCK
+        print("⚠️  Warning: Multi-output model not loaded.")
 @app.get("/", response_model=HealthResponse)
 async def root():
     """Root endpoint with API information"""
@@ -235,28 +323,58 @@ async def root():
         ice_model_loaded=ice_model_data is not None
     )
 
-@app.get("/health", response_model=HealthResponse)
+
+# @app.get("/health", response_model=HealthResponse)
+# async def health_check():
+#     """Health check endpoint"""
+#     seawater_loaded = seawater_model_data is not None
+#     ice_loaded = ice_model_data is not None
+    
+#     if seawater_loaded and ice_loaded:
+#         status = "healthy"
+#         message = "Both models loaded successfully"
+#     elif seawater_loaded or ice_loaded:
+#         status = "degraded"
+#         message = "Only one model loaded"
+#     else:
+#         status = "unhealthy"
+#         message = "No models loaded"
+    
+#     return HealthResponse(
+#         status=status,
+#         message=message,
+#         seawater_model_loaded=seawater_loaded,
+#         ice_model_loaded=ice_loaded
+#     )
+
+@app.get("/health")
 async def health_check():
     """Health check endpoint"""
     seawater_loaded = seawater_model_data is not None
     ice_loaded = ice_model_data is not None
+    multi_output_loaded = multi_output_model_data is not None  # ADD THIS LINE
     
-    if seawater_loaded and ice_loaded:
+    loaded_count = sum([seawater_loaded, ice_loaded, multi_output_loaded])  # UPDATE THIS LINE
+    
+    if loaded_count == 3:  # CHANGE FROM 2 TO 3
         status = "healthy"
-        message = "Both models loaded successfully"
-    elif seawater_loaded or ice_loaded:
+        message = "All models loaded successfully"
+    elif loaded_count > 0:
         status = "degraded"
-        message = "Only one model loaded"
+        message = f"{loaded_count}/3 models loaded"
     else:
         status = "unhealthy"
         message = "No models loaded"
     
-    return HealthResponse(
-        status=status,
-        message=message,
-        seawater_model_loaded=seawater_loaded,
-        ice_model_loaded=ice_loaded
-    )
+    return {
+        "status": status,
+        "message": message,
+        "seawater_model_loaded": seawater_loaded,
+        "ice_model_loaded": ice_loaded,
+        "multi_output_model_loaded": multi_output_loaded  # ADD THIS LINE
+    }
+
+
 
 @app.get("/model-info", response_model=ModelInfo)
 async def get_model_info():
@@ -286,6 +404,100 @@ async def get_model_info():
         }
     
     return ModelInfo(seawater_model=seawater_info, ice_model=ice_info)
+
+
+@app.post("/predict/multi-output", response_model=MultiOutputResponse)
+async def predict_multi_output(input_data: MultiOutputInput):
+    """
+    Predict multiple output properties based on year, month, and temperature
+    
+    This endpoint uses the multi-output model to predict all target variables simultaneously.
+    """
+    if multi_output_model_data is None:
+        raise HTTPException(status_code=503, detail="Multi-output model not loaded")
+    
+    try:
+        # Make prediction
+        predictions = predict_multi_output_properties(
+            input_data.year,
+            input_data.month, 
+            input_data.temperature_k
+        )
+        
+        # Prepare response
+        response = MultiOutputResponse(
+            input_parameters={
+                "year": input_data.year,
+                "month": input_data.month,
+                "temperature_k": input_data.temperature_k,
+                "temperature_celsius": input_data.temperature_k - 273.15
+            },
+            predictions=predictions,
+            model_info={
+                "model_name": multi_output_model_data['model_name'],
+                "overall_r2_score": multi_output_model_data['performance']['overall_r2'],
+                "overall_rmse": multi_output_model_data['performance']['overall_rmse'],
+                "output_count": len(predictions),
+                "output_features": multi_output_model_data['output_features']
+            },
+            prediction_timestamp=datetime.now().isoformat()
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Multi-output prediction error: {str(e)}")
+
+@app.post("/predict/multi-output-batch")
+async def predict_multi_output_batch(input_list: list[MultiOutputInput]):
+    """Batch prediction for multiple multi-output inputs"""
+    if multi_output_model_data is None:
+        raise HTTPException(status_code=503, detail="Multi-output model not loaded")
+    
+    if len(input_list) > 100:
+        raise HTTPException(status_code=400, detail="Maximum 100 predictions per batch")
+    
+    results = []
+    for input_data in input_list:
+        try:
+            predictions = predict_multi_output_properties(
+                input_data.year,
+                input_data.month,
+                input_data.temperature_k
+            )
+            
+            results.append({
+                "input": {
+                    "year": input_data.year,
+                    "month": input_data.month,
+                    "temperature_k": input_data.temperature_k
+                },
+                "predictions": predictions,
+                "success": True
+            })
+        except Exception as e:
+            results.append({
+                "input": {
+                    "year": input_data.year,
+                    "month": input_data.month,
+                    "temperature_k": input_data.temperature_k
+                },
+                "error": str(e),
+                "success": False
+            })
+    
+    return {
+        "batch_size": len(input_list),
+        "results": results,
+        "model_info": {
+            "model_name": multi_output_model_data['model_name'],
+            "overall_r2_score": multi_output_model_data['performance']['overall_r2']
+        }
+    }
+
+
 
 # ============= SEAWATER ENDPOINTS =============
 @app.post("/predict/seawater", response_model=SeawaterOutput)
@@ -438,16 +650,30 @@ async def predict_ice_batch(requests: list[IcePredictionRequest]):
     return {"predictions": results}
 
 # ============= UTILITY ENDPOINTS =============
+# @app.post("/load-models")
+# async def load_models_endpoint():
+#     """Manually trigger model loading"""
+#     seawater_success = load_seawater_model()
+#     ice_success = load_ice_model()
+    
+#     return {
+#         "seawater_model_loaded": seawater_success,
+#         "ice_model_loaded": ice_success,
+#         "message": f"Seawater: {'✅' if seawater_success else '❌'}, Ice: {'✅' if ice_success else '❌'}"
+#     }
+
 @app.post("/load-models")
 async def load_models_endpoint():
     """Manually trigger model loading"""
     seawater_success = load_seawater_model()
     ice_success = load_ice_model()
+    multi_output_success = load_multi_output_model()  # ADD THIS LINE
     
     return {
         "seawater_model_loaded": seawater_success,
         "ice_model_loaded": ice_success,
-        "message": f"Seawater: {'✅' if seawater_success else '❌'}, Ice: {'✅' if ice_success else '❌'}"
+        "multi_output_model_loaded": multi_output_success,  # ADD THIS LINE
+        "message": f"Seawater: {'✅' if seawater_success else '❌'}, Ice: {'✅' if ice_success else '❌'}, Multi-output: {'✅' if multi_output_success else '❌'}"  # UPDATE THIS LINE
     }
 
 # Custom exception handler
@@ -458,6 +684,20 @@ async def http_exception_handler(request, exc):
         "status_code": exc.status_code
     }
 
+# if __name__ == "__main__":
+#     print("🚀 Starting Combined Environmental Prediction API...")
+#     print("📚 API Documentation will be available at: http://localhost:8000/docs")
+#     print("🔍 Alternative docs at: http://localhost:8000/redoc")
+#     print("\n🌊 Seawater endpoints:")
+#     print("  - POST /predict/seawater")
+#     print("  - POST /predict/seawater-batch")
+#     print("\n🧊 Ice melting endpoints:")
+#     print("  - POST /predict/ice")
+#     print("  - GET /predict/ice")
+#     print("  - POST /predict/ice-batch")
+#     print("\n📊 General endpoints:")
+#     print("  - GET /health")
+#     print("  - GET /model-info")
 if __name__ == "__main__":
     print("🚀 Starting Combined Environmental Prediction API...")
     print("📚 API Documentation will be available at: http://localhost:8000/docs")
@@ -469,6 +709,9 @@ if __name__ == "__main__":
     print("  - POST /predict/ice")
     print("  - GET /predict/ice")
     print("  - POST /predict/ice-batch")
+    print("\n🔮 Multi-output endpoints:")  # ADD THIS BLOCK
+    print("  - POST /predict/multi-output")
+    print("  - POST /predict/multi-output-batch")
     print("\n📊 General endpoints:")
     print("  - GET /health")
     print("  - GET /model-info")
